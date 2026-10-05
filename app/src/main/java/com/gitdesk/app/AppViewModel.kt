@@ -191,7 +191,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         toast = "已退出登录，本机凭据已清除"
     }
 
-    fun setTheme(t: String) {
+    fun changeTheme(t: String) {
         theme = t
         prefs.theme = t
     }

@@ -629,9 +629,9 @@ fun SettingsScreen(vm: AppViewModel) {
 
         GdCard(title = "外观", subtitle = "默认跟随系统，深色浅色自动切换") {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                GdChip("跟随系统", vm.theme == "system", { vm.setTheme("system") })
-                GdChip("浅色", vm.theme == "light", { vm.setTheme("light") })
-                GdChip("深色", vm.theme == "dark", { vm.setTheme("dark") })
+                GdChip("跟随系统", vm.theme == "system", { vm.changeTheme("system") })
+                GdChip("浅色", vm.theme == "light", { vm.changeTheme("light") })
+                GdChip("深色", vm.theme == "dark", { vm.changeTheme("dark") })
             }
         }
 
