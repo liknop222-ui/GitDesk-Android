@@ -1,0 +1,95 @@
+name: GitDesk · Windows 构建（.NET）
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_path:
+        description: 解决方案或项目文件路径（留空自动查找 .sln / .csproj）
+        required: false
+        default: ''
+      configuration:
+        description: 编译配置
+        type: choice
+        options:
+          - Release
+          - Debug
+        default: Release
+      runtime:
+        description: 目标运行时
+        type: choice
+        options:
+          - win-x64
+          - win-x86
+          - win-arm64
+        default: win-x64
+      self_contained:
+        description: 自包含运行时（目标电脑无需预装 .NET）
+        type: choice
+        options:
+          - 'yes'
+          - 'no'
+        default: 'yes'
+      single_file:
+        description: 打包为单文件
+        type: choice
+        options:
+          - 'yes'
+          - 'no'
+        default: 'yes'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: 云端编译
+    runs-on: windows-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: 解析目标项目
+        id: pick
+        shell: pwsh
+        run: |
+          $p = "${{ inputs.project_path }}".Trim()
+          if ([string]::IsNullOrEmpty($p)) {
+            $cand = Get-ChildItem -Recurse -File -Include *.sln,*.csproj -ErrorAction SilentlyContinue |
+                    Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' } |
+                    Sort-Object { if ($_.Extension -eq '.sln') { 0 } else { 1 } } |
+                    Select-Object -First 1
+            if (-not $cand) {
+              Write-Error '没有找到 .sln 或 .csproj 文件'
+              exit 1
+            }
+            $p = $cand.FullName
+          }
+          "path=$p" >> $env:GITHUB_OUTPUT
+          Write-Host "目标项目：$p"
+
+      - name: 发布
+        shell: pwsh
+        run: |
+          $sc = if ("${{ inputs.self_contained }}" -eq 'yes') { 'true' } else { 'false' }
+          $sf = if ("${{ inputs.single_file }}" -eq 'yes') { 'true' } else { 'false' }
+          dotnet publish "${{ steps.pick.outputs.path }}" `
+            -c ${{ inputs.configuration }} `
+            -r ${{ inputs.runtime }} `
+            --self-contained $sc `
+            -p:PublishSingleFile=$sf `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:DebugType=none `
+            -o publish
+
+      - name: 收集产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitdesk-windows-dotnet
+          path: publish/**
+          if-no-files-found: error
+          retention-days: 14

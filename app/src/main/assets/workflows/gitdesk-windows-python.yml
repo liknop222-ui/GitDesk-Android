@@ -1,0 +1,89 @@
+name: GitDesk · Windows 构建（Python）
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_dir:
+        description: 项目根目录（就在仓库根目录时填 .）
+        required: false
+        default: .
+      entry:
+        description: 入口脚本（留空自动选择第一个 .py）
+        required: false
+        default: ''
+      app_name:
+        description: 产物名称（留空使用 app）
+        required: false
+        default: ''
+      windowed:
+        description: 窗口程序（不显示控制台）
+        type: choice
+        options:
+          - 'yes'
+          - 'no'
+        default: 'yes'
+      use_mirror:
+        description: 使用国内镜像加速依赖下载
+        type: choice
+        options:
+          - 'yes'
+          - 'no'
+        default: 'yes'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: 云端编译
+    runs-on: windows-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        shell: pwsh
+        working-directory: ${{ inputs.project_dir }}
+        run: |
+          python -m pip install --upgrade pip
+          if ("${{ inputs.use_mirror }}" -eq 'yes') {
+            pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+          }
+          pip install pyinstaller
+          if (Test-Path requirements.txt) { pip install -r requirements.txt }
+
+      - name: 打包为 exe
+        shell: pwsh
+        working-directory: ${{ inputs.project_dir }}
+        run: |
+          $name = "${{ inputs.app_name }}".Trim()
+          if ([string]::IsNullOrEmpty($name)) { $name = 'app' }
+
+          $entry = "${{ inputs.entry }}".Trim()
+          if ([string]::IsNullOrEmpty($entry)) {
+            $f = Get-ChildItem -File -Filter *.py |
+                 Where-Object { $_.Name -ne 'setup.py' } |
+                 Select-Object -First 1
+            if (-not $f) {
+              Write-Error '没有找到 .py 入口文件'
+              exit 1
+            }
+            $entry = $f.Name
+          }
+
+          $mode = if ("${{ inputs.windowed }}" -eq 'yes') { '--windowed' } else { '--console' }
+          Write-Host "入口：$entry  名称：$name"
+          pyinstaller --noconfirm --onefile $mode --name $name $entry
+
+      - name: 收集产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitdesk-windows-python
+          path: ${{ inputs.project_dir }}/dist/*.exe
+          if-no-files-found: error
+          retention-days: 14

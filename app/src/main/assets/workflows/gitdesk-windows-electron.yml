@@ -1,0 +1,56 @@
+name: GitDesk · Windows 构建（Electron）
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_dir:
+        description: 项目根目录（含 package.json 的目录；就在仓库根目录时填 .）
+        required: false
+        default: .
+      use_mirror:
+        description: 使用国内镜像加速依赖下载
+        type: choice
+        options:
+          - 'yes'
+          - 'no'
+        default: 'yes'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: 云端编译
+    runs-on: windows-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装依赖
+        shell: pwsh
+        working-directory: ${{ inputs.project_dir }}
+        run: |
+          if ("${{ inputs.use_mirror }}" -eq 'yes') {
+            npm config set registry https://registry.npmmirror.com
+            "ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/" >> $env:GITHUB_ENV
+            "ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/" >> $env:GITHUB_ENV
+          }
+          if (Test-Path package-lock.json) { npm ci } else { npm install }
+
+      - name: 打包为 exe
+        shell: pwsh
+        working-directory: ${{ inputs.project_dir }}
+        run: npx --yes electron-builder --win --publish never
+
+      - name: 收集产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitdesk-windows-electron
+          path: ${{ inputs.project_dir }}/dist/**
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <external-files-path name="gitdesk_ext" path="." />
+    <files-path name="gitdesk_int" path="." />
+    <cache-path name="gitdesk_cache" path="." />
+</paths>

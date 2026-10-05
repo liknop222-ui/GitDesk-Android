@@ -1,0 +1,42 @@
+name: GitDesk · Windows 构建（C/C++）
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_dir:
+        description: 项目根目录（含 CMakeLists.txt 的目录；就在仓库根目录时填 .）
+        required: false
+        default: .
+      cmake_args:
+        description: CMake 附加参数（例如 -DBUILD_TESTING=OFF）
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: 云端编译
+    runs-on: windows-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 配置 CMake
+        shell: pwsh
+        working-directory: ${{ inputs.project_dir }}
+        run: cmake -S . -B build -A x64 ${{ inputs.cmake_args }}
+
+      - name: 编译
+        shell: pwsh
+        working-directory: ${{ inputs.project_dir }}
+        run: cmake --build build --config Release --parallel
+
+      - name: 收集产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitdesk-windows-cpp
+          path: ${{ inputs.project_dir }}/build/**/*.exe
+          if-no-files-found: error
+          retention-days: 14

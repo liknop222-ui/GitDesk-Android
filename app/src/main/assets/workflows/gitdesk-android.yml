@@ -1,0 +1,225 @@
+name: GitDesk · Android 构建
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_dir:
+        description: 项目根目录（含 gradlew 的目录；就在仓库根目录时填 .）
+        required: false
+        default: .
+      gradle_task:
+        description: Gradle 任务
+        type: choice
+        options:
+          - assembleDebug
+          - assembleRelease
+          - bundleRelease
+        default: assembleDebug
+      build_type:
+        description: 构建类型（release 会尝试用仓库 Secrets 中的密钥签名）
+        type: choice
+        options:
+          - debug
+          - release
+        default: debug
+      app_name:
+        description: 应用名称（留空不修改）
+        required: false
+        default: ''
+      package_name:
+        description: 包名 applicationId（留空不修改）
+        required: false
+        default: ''
+      version_name:
+        description: 版本号 versionName（留空不修改）
+        required: false
+        default: ''
+      version_code:
+        description: 版本码 versionCode（留空不修改）
+        required: false
+        default: ''
+      icon_path:
+        description: 图标文件在仓库中的路径（留空不替换）
+        required: false
+        default: ''
+      use_mirror:
+        description: 使用国内镜像加速依赖下载
+        type: choice
+        options:
+          - 'yes'
+          - 'no'
+        default: 'yes'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: 云端编译
+    runs-on: ubuntu-latest
+    env:
+      GITDESK_KEYSTORE: ${{ runner.temp }}/gitdesk-release.keystore
+      GITDESK_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      GITDESK_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      GITDESK_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 启用依赖镜像加速
+        if: ${{ inputs.use_mirror == 'yes' }}
+        run: |
+          mkdir -p ~/.gradle
+          cat > ~/.gradle/init.gradle <<'GRADLE'
+          allprojects {
+              buildscript {
+                  repositories {
+                      maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+                      maven { url 'https://maven.aliyun.com/repository/google' }
+                      maven { url 'https://maven.aliyun.com/repository/public' }
+                  }
+              }
+              repositories {
+                  maven { url 'https://maven.aliyun.com/repository/google' }
+                  maven { url 'https://maven.aliyun.com/repository/public' }
+                  mavenCentral()
+                  google()
+              }
+          }
+          GRADLE
+          echo "Gradle 镜像已写入 ~/.gradle/init.gradle"
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 配置 Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 修改应用信息
+        run: |
+          python3 - "${{ inputs.project_dir }}" "${{ inputs.app_name }}" "${{ inputs.package_name }}" "${{ inputs.version_name }}" "${{ inputs.version_code }}" <<'PY'
+          import re, sys, pathlib
+
+          root = pathlib.Path(sys.argv[1] or '.')
+          app_name, pkg, vname, vcode = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+          changed = []
+
+          if app_name:
+              for f in root.rglob('strings.xml'):
+                  t = f.read_text(encoding='utf-8', errors='ignore')
+                  if 'name="app_name"' in t:
+                      n = re.sub(r'(<string name="app_name"[^>]*>).*?(</string>)',
+                                 lambda m: m.group(1) + app_name + m.group(2), t, flags=re.S)
+                      if n != t:
+                          f.write_text(n, encoding='utf-8')
+                          changed.append(str(f))
+
+          for f in list(root.rglob('build.gradle')) + list(root.rglob('build.gradle.kts')):
+              if 'node_modules' in f.parts:
+                  continue
+              t = f.read_text(encoding='utf-8', errors='ignore')
+              o = t
+              if pkg:
+                  t = re.sub(r'(namespace\s*=?\s*)(["\'])([^"\']*)\2',
+                             lambda m: m.group(1) + m.group(2) + pkg + m.group(2), t)
+                  t = re.sub(r'(applicationId\s*=?\s*)(["\'])([^"\']*)\2',
+                             lambda m: m.group(1) + m.group(2) + pkg + m.group(2), t)
+              if vname:
+                  t = re.sub(r'(versionName\s*=?\s*)(["\'])([^"\']*)\2',
+                             lambda m: m.group(1) + m.group(2) + vname + m.group(2), t)
+              if vcode:
+                  t = re.sub(r'(versionCode\s*=?\s*)\d+', lambda m: m.group(1) + vcode, t)
+              if t != o:
+                  f.write_text(t, encoding='utf-8')
+                  changed.append(str(f))
+
+          print('已修改文件：', ', '.join(changed) if changed else '无')
+          PY
+
+      - name: 替换应用图标
+        if: ${{ inputs.icon_path != '' }}
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check pillow
+          python3 - "${{ inputs.project_dir }}" "${{ inputs.icon_path }}" <<'PY'
+          import sys, pathlib
+          from PIL import Image
+
+          root = pathlib.Path(sys.argv[1] or '.')
+          src = pathlib.Path(sys.argv[2])
+          if not src.is_file():
+              print('图标文件不存在，跳过：', src)
+              sys.exit(0)
+
+          img = Image.open(src).convert('RGBA')
+          sizes = {'mdpi': 48, 'hdpi': 72, 'xhdpi': 96, 'xxhdpi': 144, 'xxxhdpi': 192}
+          names = ['ic_launcher.png', 'ic_launcher_round.png', 'ic_launcher_foreground.png']
+
+          bases = sorted({p.parent for p in root.rglob('mipmap-mdpi') if 'node_modules' not in p.parts})
+          if not bases:
+              bases = [root / 'app' / 'src' / 'main' / 'res']
+
+          count = 0
+          for base in bases:
+              for res, px in sizes.items():
+                  d = base / ('mipmap-' + res)
+                  d.mkdir(parents=True, exist_ok=True)
+                  icon = img.resize((px, px), Image.LANCZOS)
+                  for n in names:
+                      icon.save(d / n)
+                      count += 1
+
+          print('图标已写入', count, '个文件，覆盖', len(bases), '个 res 目录')
+          PY
+
+      - name: 配置 Release 签名
+        if: ${{ inputs.build_type == 'release' }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning title=未配置签名::没有找到 ANDROID_KEYSTORE_BASE64，本次输出未签名包"
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$GITDESK_KEYSTORE"
+          GRADLE_FILE="$(find "${{ inputs.project_dir }}" -name 'build.gradle' -not -path '*/node_modules/*' -print0 2>/dev/null | xargs -0 grep -l 'com.android.application' 2>/dev/null | head -n1 || true)"
+          if [ -z "$GRADLE_FILE" ]; then
+            echo "::warning title=未找到应用模块::没有找到含 com.android.application 的 build.gradle，跳过签名配置"
+            exit 0
+          fi
+          cat >> "$GRADLE_FILE" <<'GRADLE'
+          android {
+              signingConfigs {
+                  gitdeskRelease {
+                      storeFile file(System.getenv("GITDESK_KEYSTORE"))
+                      storePassword System.getenv("GITDESK_STORE_PASSWORD")
+                      keyAlias System.getenv("GITDESK_KEY_ALIAS")
+                      keyPassword System.getenv("GITDESK_KEY_PASSWORD")
+                  }
+              }
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.gitdeskRelease
+                  }
+              }
+          }
+          GRADLE
+          echo "签名配置已写入 $GRADLE_FILE"
+
+      - name: 执行构建
+        run: |
+          cd "${{ inputs.project_dir }}"
+          chmod +x gradlew || true
+          ./gradlew ${{ inputs.gradle_task }} --no-daemon --stacktrace
+
+      - name: 收集产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitdesk-android
+          path: |
+            **/build/outputs/apk/**/*.apk
+            **/build/outputs/bundle/**/*.aab
+          if-no-files-found: error
+          retention-days: 14
