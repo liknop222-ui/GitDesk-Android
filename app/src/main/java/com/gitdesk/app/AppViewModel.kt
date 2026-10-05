@@ -256,7 +256,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
         projectKind = label
         selectTarget(id)
-        addLog("从$source读取 ${list.size} 个文件 · $label")
+        addLog("从${source}读取 ${list.size} 个文件 · $label")
         toast = "读到 ${list.size} 个文件 · $label"
     }
 
