@@ -30,8 +30,24 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: 配置 Android SDK
-        uses: android-actions/setup-android@v3
+      # runner 镜像已预装 Android SDK，这里只补齐需要的组件。
+      # 不用 android-actions/setup-android：它内部执行 `sdkmanager tools`，
+      # 而该包已从官方仓库移除，会直接报 "Failed to find package 'tools'"。
+      - name: 准备 Android SDK
+        run: |
+          set -eo pipefail
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          SDKMGR="$(find "$ANDROID_HOME" -maxdepth 4 -type f -name sdkmanager 2>/dev/null | head -n 1)"
+          if [ -z "$SDKMGR" ]; then
+            echo "::error::找不到 sdkmanager"
+            exit 1
+          fi
+          echo "sdkmanager=$SDKMGR"
+          yes | "$SDKMGR" --licenses >/dev/null 2>&1 || true
+          "$SDKMGR" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
 
       - name: 安装 Gradle
         uses: gradle/actions/setup-gradle@v4
